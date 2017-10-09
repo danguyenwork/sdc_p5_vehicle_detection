@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 class Tracker(object):
 
-    N_FRAME_HEATMAP_THRESHOLD = 8
+    N_FRAME_HEATMAP_THRESHOLD = 7
 
     def __init__(self, nframe = 10):
         self.nframe = nframe
@@ -46,7 +46,7 @@ class Tracker(object):
         else:
             imgd = None
 
-        return final_resultimgd
+        return final_result, imgd
 
     # Here is your draw_boxes function from the previous exercise
     def _draw_boxes(self, img, bboxes, color=(0, 0, 255), thick=6):

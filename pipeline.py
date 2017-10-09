@@ -22,14 +22,14 @@ def pipeline(img, fname = None):
 
     # Perform search here
     car_windows = searcher.search(img)
-    t2 = time.time()
-    print('Search time: ', t2-t1)
+    # t2 = time.time()
+    # print('Search time: ', t2-t1)
     frame.save_car_windows(car_windows)
     tracker.append_frame(frame)
 
     final_result, imgd = tracker.track(write_images)
-    t3 = time.time()
-    print('Track time:', t3-t2)
+    # t3 = time.time()
+    # print('Track time:', t3-t2)
 
     if (write_images and imgmode) or (write_images and not imgmode and tracker.frame_count % 10 == 0):
         frame.append_to_image_dict(imgd)
@@ -81,7 +81,7 @@ if __name__ == '__main__':
             pipeline(img, fname = fname)
             tracker = Tracker()
     else:
-        test_videos = glob.glob('test_videos/test_video.mp4')
+        test_videos = glob.glob('test_videos/project_video.mp4')
         for fname in test_videos:
             if end != 0:
                 inp = VideoFileClip(fname).subclip(start,end)

@@ -15,7 +15,7 @@ class Searcher(object):
     CELLS_PER_STEP = 2
 
     SCALES = [1, 1.4, 1.8, 2.2, 2.5]
-    PREDICT_PROBA_THRESHOLD = 0.95
+    PREDICT_PROBA_THRESHOLD = 0.90
 
     def __init__(self, model, extractor):
         self.model = model
@@ -69,13 +69,13 @@ class Searcher(object):
 
         # Compute individual channel HOG features for the entire image
 
-        start = time.time()
+        # start = time.time()
 
         hog1, hog2, hog3 = extractor._extract_hog(x_converted, feature_vec = False)[0]
 
-        end = time.time()
+        # end = time.time()
 
-        print('hog: ', end - start)
+        # print('hog: ', end - start)
 
         car_windows = []
 
@@ -118,9 +118,6 @@ class Searcher(object):
         car_windows = []
 
         for scale in self.SCALES:
-            start = time.time()
             car_windows.extend(self._search_by_hog_subsampling_one(img, scale))
-            end = time.time()
-            print('One scale: ', end - start)
 
         return car_windows
