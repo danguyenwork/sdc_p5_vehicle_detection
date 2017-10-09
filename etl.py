@@ -1,10 +1,12 @@
 import os
 import pickle
 import numpy as np
-from PIL import Image
 from sklearn.utils import shuffle
 from tqdm import tqdm
 from zipfile import ZipFile
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+import cv2
 
 DATA_DIRECTORY = 'data/'
 
@@ -27,12 +29,8 @@ def uncompress_features_labels(file):
             if not filename.endswith('.png') or '__MACOSX' in filename :
                 continue
 
-            with zipf.open(filename) as image_file:
-                image = Image.open(image_file)
-                image.load()
-                # Load image data as 1 dimensional array
-                # We're using float32 to save on memory space
-                feature = np.array(image, dtype=np.float32)
+            data = zipf.read(filename)
+            feature = cv2.imdecode(np.frombuffer(data, np.uint8), 1)
 
             # Get the the letter from the filename.  This is the letter of the image.
             label = 0 if 'non-vehicle' in filename else 1
@@ -115,16 +113,35 @@ def extract_data_from_zip(docker_size_limit=150000):
     valid_features, valid_labels = shuffle(valid_features, valid_labels)
     test_features, test_labels = shuffle(test_features, test_labels)
 
+    # for ind, val in enumerate(train_features):
+    #     # import ipdb; ipdb.set_trace()
+    #     if train_labels[ind] == 0:
+    #         mpimg.imsave('data/train/non-vehicle/img_' + str(ind) + '.png', train_features[ind])
+    #     else:
+    #         mpimg.imsave('data/train/vehicle/img_' + str(ind) + '.png', train_features[ind])
+    #
+    # for ind, val in enumerate(valid_features):
+    #     if valid_labels[ind] == 0:
+    #         mpimg.imsave('data/valid/non-vehicle/img_' + str(ind) + '.png', valid_features[ind])
+    #     else:
+    #         mpimg.imsave('data/valid/vehicle/img_' + str(ind) + '.png', valid_features[ind])
+    #
+    # for ind, val in enumerate(test_features):
+    #     if test_labels[ind] == 0:
+    #         mpimg.imsave('data/test/non-vehicle/img_' + str(ind) + '.png', test_features[ind])
+    #     else:
+    #         mpimg.imsave('data/test/vehicle/img_' + str(ind) + '.png', test_features[ind])
+
     return train_features, train_labels, valid_features, valid_labels, test_features, test_labels
 
-def prep_data_for_training():
-    train_features, train_labels, valid_features, valid_labels, test_features, test_labels = extract_data_from_zip()
-
+def load_data():
     pickle_file = 'data.pickle'
-
     if not os.path.isfile(DATA_DIRECTORY + pickle_file):
-        print('Saving data to pickle file...')
-        try:
+        train_features, train_labels, valid_features, valid_labels, test_features, test_labels = extract_data_from_zip()
+
+        pickle_file = 'data.pickle'
+        if not os.path.isfile(DATA_DIRECTORY + pickle_file):
+            print('Saving data to pickle file...')
             with open('data/data.pickle', 'wb') as pfile:
                 pickle.dump(
                     {
@@ -136,16 +153,8 @@ def prep_data_for_training():
                         'test_labels': test_labels,
                     },
                     pfile, pickle.HIGHEST_PROTOCOL)
-        except Exception as e:
-            print('Unable to save data to', pickle_file, ':', e)
-            raise
+        print('Data cached in pickle file.')
 
-    print('Data cached in pickle file.')
-
-def load_data():
-    pickle_file = 'data.pickle'
-    if not os.path.isfile(DATA_DIRECTORY + pickle_file):
-        prep_data_for_training()
     with open(DATA_DIRECTORY + pickle_file, 'rb') as f:
       pickle_data = pickle.load(f)
       train_features = pickle_data['train_dataset']

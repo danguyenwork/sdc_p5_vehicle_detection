@@ -10,68 +10,78 @@ import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import sys
 import glob
+import cv2
+import time
+from tracker import Tracker
 
 def pipeline(img, fname = None):
     # frame = Frame(img)
+    frame = Frame(img)
 
-
-    # Perform transformation here
-
+    t1 = time.time()
 
     # Perform search here
-    frame = Frame(img)
-    draw_img = searcher.search(frame, save_intermediate_step = write_images, fname = fname)
-    # if fname:
-        # mpimg.imsave('output_images/' + fname.split("/")[1], draw_img)
+    car_windows = searcher.search(img)
+    t2 = time.time()
+    print('Search time: ', t2-t1)
+    frame.save_car_windows(car_windows)
+    tracker.append_frame(frame)
+
+    final_result, imgd = tracker.track(write_images)
+    t3 = time.time()
+    print('Track time:', t3-t2)
+
+    if (write_images and imgmode) or (write_images and not imgmode and tracker.frame_count % 10 == 0):
+        frame.append_to_image_dict(imgd)
+        frame.save_plot(fname=fname)
+
+    return final_result
 
 def train_model():
-    trainer_fn = 'data/finalized_trainer.sav'
+    model_fn = 'data/finalized_model.sav'
     extractor_fn = 'data/finalized_extractor.sav'
 
-    if not os.path.isfile(trainer_fn) or not os.path.isfile(extractor_fn):
+    if not os.path.isfile(model_fn) or not os.path.isfile(extractor_fn) or OVERWRITE_TRAINER:
         print('Training')
 
         data = load_data()
 
-        model_choice = 'LinearSVC'
-        params = {}
-        trainer = Trainer(model_choice, params)
-
-        train_features, train_labels, valid_features, valid_labels, test_features, test_labels = data
-
         extractor = Extractor()
 
-        x_train = extractor.fit_transform(train_features[:10])
-        y_train = train_labels[:10]
-
-        trainer.fit(x_train, y_train)
+        trainer = Trainer(data, extractor)
+        trainer.train()
+        model = trainer.best_model
 
         # save the model to disk
-        pickle.dump(trainer, open(trainer_fn, 'wb'))
+        pickle.dump(model, open(model_fn, 'wb'))
         pickle.dump(extractor, open(extractor_fn, 'wb'))
 
-    trainer = pickle.load(open(trainer_fn, 'rb'))
+    model = pickle.load(open(model_fn, 'rb'))
     extractor = pickle.load(open(extractor_fn, 'rb'))
 
-    return trainer.model, extractor
+    return model, extractor
 
 if __name__ == '__main__':
+    OVERWRITE_TRAINER = False
+
     model, extractor = train_model()
     searcher = Searcher(model, extractor)
+    tracker = Tracker()
 
     start = int(sys.argv[1])
     end = int(sys.argv[2])
     write_images = (sys.argv[3] == 'True')
     imgmode = (sys.argv[4] == 'img')
 
+
     if imgmode:
         test_fnames = glob.glob('test_images/*.jpg')
         for fname in test_fnames:
             img = mpimg.imread(fname)
             pipeline(img, fname = fname)
-            break
+            tracker = Tracker()
     else:
-        test_videos = glob.glob('test_videos/*.mp4')
+        test_videos = glob.glob('test_videos/test_video.mp4')
         for fname in test_videos:
             if end != 0:
                 inp = VideoFileClip(fname).subclip(start,end)

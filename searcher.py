@@ -1,150 +1,126 @@
-import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 from extractor import Extractor
-from scipy.ndimage.measurements import label
+import collections
+import itertools
+import time
 
 class Searcher(object):
-    def __init__(self, model, extractor, x_start_stop = (0, 1280), y_start_stop = (0,720), xy_window = (64,64), xy_overlap = (0.5, 0.5), width = 1280, height = 720):
+    X_START = 0
+    X_STOP = 1280
+    Y_START = 400
+    Y_STOP = 656
+
+    CELLS_PER_STEP = 2
+
+    SCALES = [1, 1.4, 1.8, 2.2, 2.5]
+    PREDICT_PROBA_THRESHOLD = 0.95
+
+    def __init__(self, model, extractor):
         self.model = model
-
-        hyperparams = self._calculate_search_hyperparameters(x_start_stop, y_start_stop, xy_window, xy_overlap,width, height)
-
-        self.x_start = hyperparams[0]
-        self.x_stop = hyperparams[1]
-        self.y_start = hyperparams[2]
-        self.y_stop = hyperparams[3]
-        self.sliding_pixel_x = hyperparams[4]
-        self.sliding_pixel_y = hyperparams[5]
-
-        self.width = width
-        self.height = height
-
-        self.xy_window = xy_window
-
         self.extractor = extractor
 
-    def _calculate_search_hyperparameters(self, x_start_stop, y_start_stop, xy_window, xy_overlap, width, height):
-        x_start = x_start_stop[0] or 0
-        x_stop = x_start_stop[1] or width
-        y_start = y_start_stop[0] or 0
-        y_stop = min(y_start_stop[1], height // 2) if y_start_stop[1] else height // 2
-
-        sliding_pixel_x = int(xy_window[0] * xy_overlap[0])
-        sliding_pixel_y = int(xy_window[1] * xy_overlap[1])
-
-        return x_start, x_stop, y_start, y_stop, sliding_pixel_x, sliding_pixel_y
-
-    # Here is your draw_boxes function from the previous exercise
-    def draw_boxes(self, img, bboxes, color=(0, 0, 255), thick=6):
-        # Make a copy of the image
-        imcopy = np.copy(img)
-        # Iterate through the bounding boxes
-        for bbox in bboxes:
-            # Draw a rectangle given bbox coordinates
-            # Need to reverse the tuple because cv2.rectangle expects coordinates in the (x, y) order
-            cv2.rectangle(imcopy, bbox[0][::-1], bbox[1][::-1], color, thick)
-        # Return the image copy with boxes drawn
-        return imcopy
-
-    # Define a function that takes an image,
-    # start and stop positions in both x and y,
-    # window size (x and y dimensions),
-    # and overlap fraction (for both x and y)
-    def _slide_window(self, img):
-        window_list = []
-
-        bottom_left = (self.height, 0)
-        top_right = (self.height - self.xy_window[1], self.xy_window[0])
-
-        while True:
-            window_list.append((bottom_left, top_right))
-
-            # move the bottom_left point sliding_pixel_x pixels left
-            bottom_left = (bottom_left[0], bottom_left[1] + self.sliding_pixel_x)
-
-            # move the top_right point sliding_pixel_x left
-            top_right = (top_right[0], top_right[1] + self.sliding_pixel_x)
-
-            # if the box goes over the right border, move up to the next row and start over from the left
-            if top_right[1] > self.x_stop:
-                bottom_left = (bottom_left[0] - self.sliding_pixel_y, 0)
-                top_right = (top_right[0] - self.sliding_pixel_y, self.xy_window[1])
-
-            # if the box exceeds the top border, the search is done
-            if top_right[0] < self.y_stop:
-                break
-
-        return window_list
-
-    def _add_heat(self, img, windows):
-        heatmap = np.zeros_like(img[:,:,0]).astype(np.float)
-
-        for window in windows:
-            heatmap[window[1][0]:window[0][0], window[0][1]:window[1][1]] += 1
-
-        return np.clip(heatmap, 0, 255)
-
-    def _apply_threshold(self, heatmap, threshold):
-        copy = np.copy(heatmap)
-        copy[heatmap <= threshold] = 0
-        return copy
-
-    def _predict(self, img, window):
+    def _predict_window_one(self, img, window):
         y_start = window[1][0]
         y_end = window[0][0]
         x_start = window[0][1]
         x_end = window[1][1]
 
-        test_img = cv2.resize(img[y_start:y_end, x_start:x_end], (64, 64)).astype(float)
+        x = cv2.resize(img[y_start:y_end, x_start:x_end], (64, 64)).astype(np.uint8)
 
-        feature_vector = self.extractor.transform([test_img])
+
+        feature_vector = self.extractor.transform([x])
 
         prediction = self.model.predict(feature_vector)
         return prediction[0]
 
-    def _draw_labeled_bboxes(self,img, labels):
-        # Iterate through all detected cars
-        for car_number in range(1, labels[1]+1):
-            # Find pixels with each car_number label value
-            nonzero = (labels[0] == car_number).nonzero()
-            # Identify x and y values of those pixels
-            nonzeroy = np.array(nonzero[0])
-            nonzerox = np.array(nonzero[1])
-            # Define a bounding box based on min/max x and y
-            bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
-            # Draw the box on the image
-            cv2.rectangle(img, bbox[0], bbox[1], (0,0,255), 6)
-        # Return the image
-        return img
+    def _search_by_hog_subsampling_one(self, img, scale):
+        extractor = self.extractor
+        ystart = self.Y_START
+        ystop = self.Y_STOP
 
-    def search(self, frame, save_intermediate_step = False, fname = None):
-        img = frame.get_img_to_predict()
+        orient = extractor.ORIENT
+        pix_per_cell = extractor.PIX_PER_CELL[0]
+        cell_per_block = extractor.CELL_PER_BLOCK[0]
+        spatial_size = extractor.SPATIAL_SIZE
+        hist_bins = extractor.NBINS
+        bins_range = extractor.BINS_RANGE
 
-        windows = self._slide_window(img)
+        num_cells = pix_per_cell
+        cells_per_step = self.CELLS_PER_STEP
+        window = num_cells * pix_per_cell
+
+        img_tosearch = img[ystart:ystop,:,:]
+        x_converted = extractor.convert_color(img_tosearch, extractor.COLOR_SPACE)
+
+        if scale != 1:
+            imshape = x_converted.shape
+            x_converted = cv2.resize(x_converted, (np.int(imshape[1]/scale), np.int(imshape[0]/scale)))
+
+        # Define blocks and steps as above
+        nxblocks = (x_converted.shape[1] // pix_per_cell) - cell_per_block + 1
+        nyblocks = (x_converted.shape[0] // pix_per_cell) - cell_per_block + 1
+
+        nblocks_per_window = (window // pix_per_cell) - cell_per_block + 1
+
+        nxsteps = (nxblocks - nblocks_per_window) // cells_per_step
+        nysteps = (nyblocks - nblocks_per_window) // cells_per_step
+
+        # Compute individual channel HOG features for the entire image
+
+        start = time.time()
+
+        hog1, hog2, hog3 = extractor._extract_hog(x_converted, feature_vec = False)[0]
+
+        end = time.time()
+
+        print('hog: ', end - start)
+
         car_windows = []
-        for window in windows:
-            prediction = self._predict(img, window)
 
-            if prediction:
-                car_windows.append(window)
+        for xb in range(nxsteps):
+            for yb in range(nysteps):
+                ypos, xpos = yb * cells_per_step, xb * cells_per_step
+                xleft, ytop = xpos * pix_per_cell,  ypos * pix_per_cell
 
-        frame.windows_without_filtering = self.draw_boxes(img, car_windows)
+                # Extract the image patch
+                subimg = cv2.resize(x_converted[ytop:ytop+window, xleft:xleft+window], (64,64))
 
-        heatmap_no_thresh = self._add_heat(img, car_windows)
-        frame.append_to_image_dict('heatmap_without_threshold', heatmap_no_thresh)
+                # Get features
+                x_feature_bin = extractor.extract_bin_spatial(subimg, spatial_size)
 
-        heatmap_thresh = self._apply_threshold(heatmap_no_thresh, 1)
-        frame.append_to_image_dict('heatmap_with_threshold', heatmap_thresh)
+                x_feature_hist = extractor.extract_histogram(subimg, hist_bins, bins_range)
 
-        labels = label(heatmap_thresh)
-        frame.append_to_image_dict('car_labels_on_heatmap', labels[0])
+                x_feature_hog = np.hstack(map(lambda hog_channel: hog_channel[ypos:ypos+nblocks_per_window, xpos:xpos+nblocks_per_window].ravel(), [hog1, hog2, hog3]))
 
-        draw_img = self._draw_labeled_bboxes(np.copy(img), labels)
-        frame.append_to_image_dict('car_labels_on_original', draw_img)
+                features = np.hstack((x_feature_bin, x_feature_hist, x_feature_hog))
 
-        if save_intermediate_step:
-            frame.save_plot(fname=fname)
+                # Scale features and make a prediction
+                test_features = extractor.scale([features])
+                predict_proba = self.model.predict_proba(test_features)[0]
+                # test_prediction = self.model.predict(test_features)[0]
 
-        return draw_img
+                # if test_prediction:
+                if predict_proba[1] > self.PREDICT_PROBA_THRESHOLD:
+                    # import ipdb; ipdb.set_trace()
+                    xbox_left = np.int(xleft * scale)
+                    ytop_draw = np.int(ytop * scale)
+                    win_draw = np.int(window * scale)
+
+                    car_windows.append(((ytop_draw+ystart, xbox_left), (ytop_draw+win_draw+ystart, xbox_left+win_draw)))
+
+        return car_windows
+
+    # Main search method
+
+    def search(self, img):
+        car_windows = []
+
+        for scale in self.SCALES:
+            start = time.time()
+            car_windows.extend(self._search_by_hog_subsampling_one(img, scale))
+            end = time.time()
+            print('One scale: ', end - start)
+
+        return car_windows
